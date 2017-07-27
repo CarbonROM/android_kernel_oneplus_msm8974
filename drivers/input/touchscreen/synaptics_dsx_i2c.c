@@ -942,6 +942,12 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 #define SYNA_ONE_FINGER_DIRECTION		0x0a
 #define SYNA_ONE_FINGER_W_OR_M			0x0b
 
+#define UNICODE_DETECT  0x0b
+#define VEE_DETECT      0x0a
+#define CIRCLE_DETECT   0x08
+#define SWIPE_DETECT    0x07
+#define DTAP_DETECT 0x03
+
 #define UnknownGesture      0
 #define DouTap              1   // double tap
 #define UpVee               2   // V
@@ -956,6 +962,40 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 #define Down2UpSwip         11  // |^
 #define Mgesture            12  // M
 #define Wgesture            13  // W
+
+// carlosavignano@aospa.co, gesture codes.
+#define KEY_GESTURE_UNKNOWN           0    // KEY_RESERVED
+#define KEY_GESTURE_CIRCLE            59   // KEY_F1
+#define KEY_GESTURE_TWO_SWIPE         60   // KEY_F2
+#define KEY_GESTURE_V                 61   // KEY_F3
+#define KEY_GESTURE_V_REVERSE         62   // KEY_F4
+#define KEY_GESTURE_LEFT_V            63   // KEY_F5
+#define KEY_GESTURE_RIGHT_V           64   // KEY_F6
+#define KEY_GESTURE_LTR_ONE_SWIPE     65   // KEY_F7
+#define KEY_GESTURE_RTL_ONE_SWIPE     66   // KEY_F8
+#define KEY_GESTURE_UTD_ONE_SWIPE     67   // KEY_F9
+#define KEY_GESTURE_DTU_ONE_SWIPE     68   // KEY_F10
+#define KEY_GESTURE_W                 87   // KEY_F11
+#define KEY_GESTURE_M                 88   // KEY_F12
+#define KEY_GESTURE_DOUBLE_TAP        183  // KEY_F13
+
+// carlosavignano@aospa.co, gestures enabled bit.
+#define BIT0 (0x1 << 0)
+
+// carlosavignano@aospa.co, whether specific gesture is enabled from userspace.
+static int DouTap_gesture = 0; // "double tap"
+static int Circle_gesture = 0; // "O"
+static int DouSwip_gesture = 0; // "||"
+static int UpVee_gesture = 0; // "V"
+static int LeftVee_gesture = 0; // ">"
+static int RightVee_gesture = 0; // "<"
+static int Left2RightSwip_gesture = 0; // "(-->)"
+static int Right2LeftSwip_gesture = 0; // "(<--)"
+static int Up2DownSwip_gesture = 0; // "up to down |"
+static int Down2UpSwip_gesture = 0; // "down to up |"
+static int DownVee_gesture = 0; // "^"
+static int Wgesture_gesture = 0; // "(W)"
+static int Mgesture_gesture = 0; // "(M)"
 
 #define SYNA_SMARTCOVER_MIN	0
 #define SYNA_SMARTCOVER_MAN	750
@@ -995,6 +1035,7 @@ static int syna_log_level = TS_INFO;
 static struct synaptics_rmi4_data *syna_rmi4_data=0;
 static struct regulator *vdd_regulator=0;
 static struct regulator *vdd_regulator_i2c=0;
+static int syna_use_gesture = 0;
 static int syna_test_max_err_count = 10;
 static char synaptics_vendor_str[32];  //vendor string
 static char *synaptics_id_str;
@@ -1279,61 +1320,69 @@ static int synaptics_rmi4_pdoze_read(char *page, char **start, off_t off,
 	return len;
 }
 
-static int synaptics_rmi4_proc_double_tap_read(char *page, char **start, off_t off,
-		int count, int *eof, void *data)
-{
-	return sprintf(page, "%d\n", atomic_read(&syna_rmi4_data->double_tap_enable));
+static int synaptics_rmi4_proc_read(char *page, char **start, off_t off,
+    int count, int *eof, void *data) {
+    int len = 0 ;
+    unsigned int enable ;
+
+    enable = (syna_rmi4_data->gesture_enable)?1:0;
+
+    len = sprintf(page, "%d\n", enable);
+
+    return len ;
 }
 
-static int synaptics_rmi4_proc_double_tap_write(struct file *filp, const char __user *buff,
-		unsigned long len, void *data)
-{
-	int enable;
-	char buf[2];
+static int synaptics_rmi4_proc_write( struct file *filp, const char __user *buff,
+    unsigned long len, void *data ) {
+    unsigned char bak;
+    unsigned int enable;
+    char buf[10];
 
-	if (len > 2)
-		return 0;
+    if (len > 2) {
+        return 0;
+    }
 
-	if (copy_from_user(buf, buff, len)) {
-		print_ts(TS_DEBUG, KERN_ERR "Read proc input error.\n");
-		return -EFAULT;
-	}
+    if (copy_from_user(buf, buff, len) ){
+        printk(KERN_INFO "%s: read proc input error.\n", __func__);
+        return len;
+    }
 
-	enable = (buf[0] == '0') ? 0 : 1;
 
-	atomic_set(&syna_rmi4_data->double_tap_enable, enable);
+    printk("%s val:%x \n", __func__, buf[0]);
 
-	return len;
+    // carlosavignano@aospa.co, read bit values if check for bit enabled.
+    // Gestures are handled at userspace level anyway, check for master switch value.
+    UpVee_gesture = (buf[0] & BIT0)?1:0;           //"V"
+    DouSwip_gesture = (buf[0] & BIT0)?1:0;         //"||"
+    LeftVee_gesture = (buf[0] & BIT0)?1:0;         //">"
+    RightVee_gesture = (buf[0] & BIT0)?1:0;        //"<"
+    Circle_gesture = (buf[0] & BIT0)?1:0;          //"O"
+    DouTap_gesture = (buf[0] & BIT0)?1:0;          //double tap
+    DownVee_gesture = (buf[0] & BIT0)?1:0;         //"^"
+    Left2RightSwip_gesture = (buf[0] & BIT0)?1:0;  //"(-->)"
+    Right2LeftSwip_gesture = (buf[0] & BIT0)?1:0;  //"(<--)"
+    Up2DownSwip_gesture = (buf[0] & BIT0)?1:0;     //"up to down |"
+    Down2UpSwip_gesture = (buf[0] & BIT0)?1:0;    //"down to up |"
+    Wgesture_gesture = (buf[0] & BIT0)?1:0;       //"(W)"
+    Mgesture_gesture = (buf[0] & BIT0)?1:0;       //"(M)"
+
+    //shankai@bsp ,  fixed the bug can not disable gesture when turned off
+    // gesture in ui   .2015.8.3
+    enable =(buff[0]==0)?0:1 ;
+
+    bak = syna_rmi4_data->gesture_enable ;
+    syna_rmi4_data->gesture_enable &= 0x00 ;
+    if(enable)
+        syna_rmi4_data->gesture_enable |= 0x6b ;
+    if(bak == syna_rmi4_data->gesture_enable)
+        return len ;
+
+    if(!(syna_use_gesture && syna_rmi4_data->gesture))
+        syna_use_gesture = (syna_rmi4_data->gesture_enable&0xff)?1:0 ;
+    print_ts(TS_DEBUG, KERN_ERR "enable=0x%x\n", syna_rmi4_data->gesture_enable);
+
+    return len;
 }
-
-#define TS_ENABLE_FOPS(type) \
-static int synaptics_rmi4_proc_##type##_read(char *page, char **start, off_t off, \
-		int count, int *eof, void *data) \
-{ \
-	return sprintf(page, "%d\n", atomic_read(&syna_rmi4_data->type##_enable)); \
-} \
-static int synaptics_rmi4_proc_##type##_write(struct file *filp, const char __user *buff, \
-		unsigned long len, void *data) \
-{ \
-	int enable; \
-	char buf[2]; \
-	if (len > 2) \
-		return 0; \
-	if (copy_from_user(buf, buff, len)) { \
-		print_ts(TS_DEBUG, KERN_ERR "Read proc input error.\n"); \
-		return -EFAULT; \
-	} \
-	enable = (buf[0] == '0') ? 0 : 1; \
-	atomic_set(&syna_rmi4_data->type##_enable, enable); \
-	return len; \
-}
-
-TS_ENABLE_FOPS(double_swipe);
-TS_ENABLE_FOPS(up_arrow);
-TS_ENABLE_FOPS(down_arrow);
-TS_ENABLE_FOPS(left_arrow);
-TS_ENABLE_FOPS(right_arrow);
-TS_ENABLE_FOPS(letter_o);
 
 //smartcover proc read function
 static int synaptics_rmi4_proc_smartcover_read(char *page, char **start, off_t off,
@@ -1579,54 +1628,11 @@ static int synaptics_rmi4_init_touchpanel_proc(void)
 		proc_entry->read_proc = synaptics_rmi4_proc_glove_read;
 	}
 
-	// double tap to wake
-	proc_entry = create_proc_entry("double_tap_enable", 0664, procdir);
-	if (proc_entry) {
-		proc_entry->write_proc = synaptics_rmi4_proc_double_tap_write;
-		proc_entry->read_proc = synaptics_rmi4_proc_double_tap_read;
-	}
-
-	// wake to '||' gesture
-	proc_entry = create_proc_entry("double_swipe_enable", 0664, procdir);
-	if (proc_entry) {
-		proc_entry->write_proc = synaptics_rmi4_proc_double_swipe_write;
-		proc_entry->read_proc = synaptics_rmi4_proc_double_swipe_read;
-	}
-
-	// wake to 'Λ' gesture
-	proc_entry = create_proc_entry("up_arrow_enable", 0664, procdir);
-	if (proc_entry) {
-		proc_entry->write_proc = synaptics_rmi4_proc_up_arrow_write;
-		proc_entry->read_proc = synaptics_rmi4_proc_up_arrow_read;
-	}
-
-	// wake to 'V' gesture
-	proc_entry = create_proc_entry("down_arrow_enable", 0664, procdir);
-	if (proc_entry) {
-		proc_entry->write_proc = synaptics_rmi4_proc_down_arrow_write;
-		proc_entry->read_proc = synaptics_rmi4_proc_down_arrow_read;
-	}
-
-	// wake to '<' gesture
-	proc_entry = create_proc_entry("left_arrow_enable", 0664, procdir);
-	if (proc_entry) {
-		proc_entry->write_proc = synaptics_rmi4_proc_left_arrow_write;
-		proc_entry->read_proc = synaptics_rmi4_proc_left_arrow_read;
-	}
-
-	// wake to '>' gesture
-	proc_entry = create_proc_entry("right_arrow_enable", 0664, procdir);
-	if (proc_entry) {
-		proc_entry->write_proc = synaptics_rmi4_proc_right_arrow_write;
-		proc_entry->read_proc = synaptics_rmi4_proc_right_arrow_read;
-	}
-
-	// wake to 'O' gesture
-	proc_entry = create_proc_entry("letter_o_enable", 0664, procdir);
-	if (proc_entry) {
-		proc_entry->write_proc = synaptics_rmi4_proc_letter_o_write;
-		proc_entry->read_proc = synaptics_rmi4_proc_letter_o_read;
-	}
+    proc_entry = create_proc_entry("gesture_enable", 0666, procdir);
+    if (proc_entry) {
+        proc_entry->write_proc = synaptics_rmi4_proc_write;
+        proc_entry->read_proc = synaptics_rmi4_proc_read;
+    }
 
 	//for pdoze enable/disable interface
 	proc_entry = create_proc_entry("pdoze_mode_enable", 0664, procdir);
@@ -2319,7 +2325,7 @@ static unsigned char synaptics_rmi4_update_gesture2(unsigned char *gesture,
 		unsigned char *gestureext)
 {
 	int i;
-	unsigned int keyvalue = 0;
+	unsigned char code = KEY_GESTURE_UNKNOWN;
 	unsigned char gesturemode = UnknownGesture;
 	unsigned short points[16];
 
@@ -2329,84 +2335,150 @@ static unsigned char synaptics_rmi4_update_gesture2(unsigned char *gesture,
 	}
 
 	// 1--clockwise, 0--anticlockwise, not circle, report 2
-	points[i] = (gestureext[24] == 0x10) ? 1 :
-		(gestureext[24] == 0x20) ? 0 : 2;
+	points[i] =
+        (gestureext[24] == 0x10) ? 1 :
+		(gestureext[24] == 0x20) ? 0 :
+        2;
 
 	switch (gesture[0]) {
-		case SYNA_ONE_FINGER_CIRCLE:
-			gesturemode = Circle;
-			if (atomic_read(&syna_rmi4_data->letter_o_enable))
-				keyvalue = KEY_GESTURE_CIRCLE;
+        case CIRCLE_DETECT: // || CIRCLE_DETECT_S3203 (equal)
+            gesturemode = Circle;
+            if (Circle_gesture) {
+                code = (unsigned char) KEY_GESTURE_CIRCLE;
+            }
+            break;
+
+	case SWIPE_DETECT:
+        // case SWIPE_DETECT_S3203: (disabled)
+             gesturemode =
+	            (gestureext[24] == 0x41) ? Left2RightSwip   :
+                    (gestureext[24] == 0x42) ? Right2LeftSwip   :
+                    (gestureext[24] == 0x44) ? Up2DownSwip    :
+                    (gestureext[24] == 0x48) ? Down2UpSwip    :
+                    (gestureext[24] == 0x80) ? DouSwip        :
+                    UnknownGesture;
+            if (gesturemode == DouSwip || gesturemode == Down2UpSwip ||
+                    gesturemode == Up2DownSwip) {
+                if (abs(points[3] - points[1]) <= 800) {
+                    gesturemode = UnknownGesture;
+                    code = (unsigned char) KEY_GESTURE_UNKNOWN;
+                } else {
+                    if (gesturemode == DouSwip) {
+                        if (DouSwip_gesture) {
+                            code = (unsigned char) KEY_GESTURE_TWO_SWIPE;
+                        }
+                    } else if (gesturemode == Down2UpSwip) {
+                        if (Down2UpSwip_gesture) {
+                            code = (unsigned char) KEY_GESTURE_DTU_ONE_SWIPE;
+                        }
+                    } else if (gesturemode == Up2DownSwip) {
+                        if (Up2DownSwip_gesture) {
+                            code = (unsigned char) KEY_GESTURE_UTD_ONE_SWIPE;
+                        }
+                    }
+                }
+            } else if (gesturemode == Left2RightSwip) {
+                if (Left2RightSwip_gesture) {
+                    code = (unsigned char) KEY_GESTURE_LTR_ONE_SWIPE;
+                }
+            } else if (gesturemode == Right2LeftSwip) {
+                if (Right2LeftSwip_gesture) {
+                    code = (unsigned char) KEY_GESTURE_RTL_ONE_SWIPE;
+                }
+            }
+            break;
+
+        case DTAP_DETECT:
+        // case DTAP_DETECT_S3203: (disabled)
+            gesturemode = DouTap;
+            if (DouTap_gesture) {
+                code = (unsigned char) KEY_GESTURE_DOUBLE_TAP;
+            }
 			break;
 
-		case SYNA_TWO_FINGER_SWIPE:
-			gesturemode =
-				(gestureext[24] == 0x41) ? Left2RightSwip   :
-				(gestureext[24] == 0x42) ? Right2LeftSwip   :
-				(gestureext[24] == 0x44) ? Up2DownSwip      :
-				(gestureext[24] == 0x48) ? Down2UpSwip      :
-				(gestureext[24] == 0x80) ? DouSwip          :
-				UnknownGesture;
-			if (gesturemode == DouSwip ||
-					gesturemode == Down2UpSwip ||
-					gesturemode == Up2DownSwip) {
-				if (abs(points[3] - points[1]) <= 800)
-					gesturemode = UnknownGesture;
-			}
-			if (gesturemode == DouSwip &&
-					atomic_read(&syna_rmi4_data->double_swipe_enable))
-				keyvalue = KEY_GESTURE_DOUBLE_SWIPE;
-			break;
+        case VEE_DETECT:
+        // case VEE_DETECT_S3203: (disabled)
+	    switch (gesture[2]) {
+	        case 0x01:  //UP
+                    gesturemode = DownVee;
+                    if (DownVee_gesture) {
+                        code = (unsigned char) KEY_GESTURE_V_REVERSE;
+                    }
+		break;
+		case 0x02:  //DOWN
+		    gesturemode = UpVee;
+                    if (UpVee_gesture) {
+                        code = (unsigned char) KEY_GESTURE_V;
+                    }
+		break;
+		case 0x04:  //LEFT
+		    gesturemode = RightVee;
+                    if (RightVee_gesture) {
+                        code = (unsigned char) KEY_GESTURE_RIGHT_V;
+                    }
+		break;
+		case 0x08:  //RIGHT
+		    gesturemode = LeftVee;
+                    if (LeftVee_gesture) {
+                        code = (unsigned char) KEY_GESTURE_LEFT_V;
+                    }
+		break;
+	    }
+	break;
 
-		case SYNA_ONE_FINGER_DOUBLE_TAP:
-			gesturemode = DouTap;
-			if (atomic_read(&syna_rmi4_data->double_tap_enable))
-				keyvalue = KEY_WAKEUP;
-			break;
+	case UNICODE_DETECT:
+        // case UNICODE_DETECT_S3203: (disabled)
+	    gesturemode =
+		(gesture[2] == 0x77 && gesture[3] == 0x00) ? Wgesture :
+		(gesture[2] == 0x6d && gesture[3] == 0x00) ? Mgesture :
+		UnknownGesture;
 
-		case SYNA_ONE_FINGER_DIRECTION:
-			switch (gesture[2]) {
-				case 0x01:  //UP
-					gesturemode = DownVee;
-					if (atomic_read(&syna_rmi4_data->up_arrow_enable))
-						keyvalue = KEY_GESTURE_UP_ARROW;
-					break;
-				case 0x02:  //DOWN
-					gesturemode = UpVee;
-					if (atomic_read(&syna_rmi4_data->down_arrow_enable))
-						keyvalue = KEY_GESTURE_DOWN_ARROW;
-					break;
-				case 0x04:  //LEFT
-					gesturemode = RightVee;
-					if (atomic_read(&syna_rmi4_data->left_arrow_enable))
-						keyvalue = KEY_GESTURE_LEFT_ARROW;
-					break;
-				case 0x08:  //RIGHT
-					gesturemode = LeftVee;
-					if (atomic_read(&syna_rmi4_data->right_arrow_enable))
-						keyvalue = KEY_GESTURE_RIGHT_ARROW;
-					break;
-			}
-			break;
+                if (gesturemode == Wgesture) {
+                    if (Wgesture_gesture) {
+                        code = (unsigned char) KEY_GESTURE_W;
+                    }
+                } else if (gesturemode == Mgesture) {
+                    if (Mgesture_gesture) {
+                        code = (unsigned char) KEY_GESTURE_M;
+                    }
+                }
+        break;
+        case 0:
+            gesturemode = UnknownGesture;
+            code = (unsigned char) KEY_GESTURE_UNKNOWN;
+        break;
+        default:
+        break;
+    }
 
-		case SYNA_ONE_FINGER_W_OR_M:
-			gesturemode =
-				(gesture[2] == 0x77 && gesture[3] == 0x00) ? Wgesture :
-				(gesture[2] == 0x6d && gesture[3] == 0x00) ? Mgesture :
-				UnknownGesture;
+    printk("detect %s gesture\n", gesturemode == DouTap ? "double tap" :
+            gesturemode == UpVee ? "up vee" :
+            gesturemode == DownVee ? "down vee" :
+            gesturemode == LeftVee ? "(>)" :
+            gesturemode == RightVee ? "(<)" :
+            gesturemode == Circle ? "circle" :
+            gesturemode == DouSwip ? "(||)" :
+            gesturemode == Left2RightSwip ? "(-->)" :
+            gesturemode == Right2LeftSwip ? "(<--)" :
+            gesturemode == Up2DownSwip ? "up to down |" :
+            gesturemode == Down2UpSwip ? "down to up |" :
+            gesturemode == Mgesture ? "(M)" :
+            gesturemode == Wgesture ? "(W)" : "unknown");
 
-			keyvalue = KEY_F9;
-			break;
-	}
+    if (gesturemode != UnknownGesture) { // if (gesturemode != UnknownGesture && code != KEY_GESTURE_UNKNOWN) {
+        // Send key event with scan code == keyvalue to userspace.
+        input_report_key(syna_rmi4_data->input_dev, code, 1);
+        input_sync(syna_rmi4_data->input_dev);
+        input_report_key(syna_rmi4_data->input_dev, code, 0);
+        input_sync(syna_rmi4_data->input_dev);
+    }
 
-	if (gesturemode != UnknownGesture) {
-		syna_rmi4_data->gesturemode = gesturemode;
-		memcpy(syna_rmi4_data->points, points, sizeof(syna_rmi4_data->points));
-	} else {
-		keyvalue = 0;
-	}
+    if (gesturemode != UnknownGesture) {
+        syna_rmi4_data->gesturemode = gesturemode;
+        memcpy(syna_rmi4_data->points,points,sizeof(syna_rmi4_data->points));
+    }
 
-	return keyvalue;
+    return code;
 }
 
 /**
@@ -3776,12 +3848,19 @@ static void synaptics_rmi4_set_params(struct synaptics_rmi4_data *rmi4_data)
 	set_bit(KEY_MENU, rmi4_data->input_dev->keybit);
 	set_bit(KEY_HOMEPAGE, rmi4_data->input_dev->keybit);
 	set_bit(KEY_WAKEUP, rmi4_data->input_dev->keybit);
-	set_bit(KEY_GESTURE_DOUBLE_SWIPE, rmi4_data->input_dev->keybit);
-	set_bit(KEY_GESTURE_UP_ARROW, rmi4_data->input_dev->keybit);
-	set_bit(KEY_GESTURE_DOWN_ARROW, rmi4_data->input_dev->keybit);
-	set_bit(KEY_GESTURE_LEFT_ARROW, rmi4_data->input_dev->keybit);
-	set_bit(KEY_GESTURE_RIGHT_ARROW, rmi4_data->input_dev->keybit);
-	set_bit(KEY_GESTURE_CIRCLE, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_CIRCLE, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_TWO_SWIPE, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_V, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_LEFT_V, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_RIGHT_V, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_LTR_ONE_SWIPE, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_RTL_ONE_SWIPE, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_UTD_ONE_SWIPE, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_DTU_ONE_SWIPE, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_V_REVERSE, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_W, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_M, rmi4_data->input_dev->keybit);
+    set_bit(KEY_GESTURE_DOUBLE_TAP, rmi4_data->input_dev->keybit);
 	synaptics_ts_init_virtual_key(rmi4_data);
 
 	input_set_abs_params(rmi4_data->input_dev,
