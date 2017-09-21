@@ -1384,6 +1384,33 @@ static int synaptics_rmi4_proc_write( struct file *filp, const char __user *buff
     return len;
 }
 
+static int synaptics_rmi4_proc_double_tap_read(char *page, char **start, off_t off,
+        int count, int *eof, void *data)
+{
+    return sprintf(page, "%d\n", atomic_read(&syna_rmi4_data->double_tap_enable));
+}
+
+static int synaptics_rmi4_proc_double_tap_write(struct file *filp, const char __user *buff,
+        unsigned long len, void *data)
+{
+    int enable;
+    char buf[2];
+
+    if (len > 2)
+        return 0;
+
+    if (copy_from_user(buf, buff, len)) {
+        print_ts(TS_DEBUG, KERN_ERR "Read proc input error.\n");
+        return -EFAULT;
+    }
+
+    enable = (buf[0] == '0') ? 0 : 1;
+
+    atomic_set(&syna_rmi4_data->double_tap_enable, enable);
+
+    return len;
+}
+
 //smartcover proc read function
 static int synaptics_rmi4_proc_smartcover_read(char *page, char **start, off_t off,
 		int count, int *eof, void *data) {
@@ -1632,6 +1659,13 @@ static int synaptics_rmi4_init_touchpanel_proc(void)
     if (proc_entry) {
         proc_entry->write_proc = synaptics_rmi4_proc_write;
         proc_entry->read_proc = synaptics_rmi4_proc_read;
+    }
+
+    // double tap to wake
+    proc_entry = create_proc_entry("double_tap_enable", 0664, procdir);
+    if (proc_entry) {
+        proc_entry->write_proc = synaptics_rmi4_proc_double_tap_write;
+        proc_entry->read_proc = synaptics_rmi4_proc_double_tap_read;
     }
 
 	//for pdoze enable/disable interface
@@ -2388,12 +2422,10 @@ static unsigned char synaptics_rmi4_update_gesture2(unsigned char *gesture,
             }
             break;
 
-        case DTAP_DETECT:
-        // case DTAP_DETECT_S3203: (disabled)
-            gesturemode = DouTap;
-            if (DouTap_gesture) {
-                code = (unsigned char) KEY_GESTURE_DOUBLE_TAP;
-            }
+        case SYNA_ONE_FINGER_DOUBLE_TAP:
+			gesturemode = DouTap;
+			if (atomic_read(&syna_rmi4_data->double_tap_enable))
+				code = (unsigned char) KEY_WAKEUP;
 			break;
 
         case VEE_DETECT:
