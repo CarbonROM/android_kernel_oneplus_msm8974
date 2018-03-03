@@ -27,7 +27,7 @@
 		};
 
 		qcom,flash_torch {
-			qcom,current = <130>;
+			qcom,current = <53>;
 		};
 	};
 
